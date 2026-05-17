@@ -114,6 +114,151 @@ type MiniApp = {
         files?: Record<string, string>;
       };
 };
+
+type AdminSurface =
+  | "all"
+  | "growth"
+  | "communities"
+  | "users"
+  | "mini-apps"
+  | "mini-app-generations"
+  | "mini-app-triage"
+  | "social-builders"
+  | "content"
+  | "student-jobs"
+  | "codes"
+  | "sparks"
+  | "agents"
+  | "hosting";
+
+type AdminSurfaceCatalogEntry = {
+  surface: Exclude<AdminSurface, "all">;
+  title: string;
+  scope: "growth:read" | "miniapps:read" | "admin:read";
+  adminPages: string[];
+  data: string[];
+};
+
+type Community = {
+  _id: Id;
+  name: string;
+  displayName: string;
+  handle: string;
+  description: string;
+  communityType: string;
+  subCategory?: string | null;
+  region?: string | null;
+  athleticConference?: string | null;
+  state?: string | null;
+  logoUrl?: string | null;
+  status: "active" | "paused" | "archived" | "pending";
+  visibility: "public" | "unlisted" | "private";
+  joinability: "open" | "application" | "invite_only" | "verification_only";
+  hasMicroAppsAccess: boolean;
+  targeted: boolean;
+  enrollment?: {
+    total?: number;
+    undergraduate?: number;
+    graduate?: number;
+    asOfYear?: number;
+    source?: string;
+  } | null;
+  stats: Record<string, number>;
+  verificationConfig: {
+    methods: string[];
+    emailDomains: string[];
+    autoApprove: boolean;
+    requiresManualReview: boolean;
+    requiredFields: string[];
+  };
+  membershipConfig: unknown;
+  landingPageConfig?: unknown;
+  foundedAt: TimestampMs;
+  updatedAt?: TimestampMs | null;
+};
+
+type AdminUser = {
+  _id: Id;
+  displayName?: string | null;
+  email?: string | null;
+  emailDomain?: string | null;
+  handle?: string | null;
+  profileImageUrl?: string | null;
+  primaryCommunityId?: Id | null;
+  communityBadges: unknown[];
+  ageGroup?: string | null;
+  timezone?: string | null;
+  lastSignInAt?: TimestampMs | null;
+  signedUpAt?: TimestampMs | string | null;
+  isTestUser: boolean;
+  isDeleted: boolean;
+  hasMicroAppsAccess: boolean;
+  hasCompletedOnboarding: boolean;
+  firstMicroAppCreatedAt?: TimestampMs | null;
+  referralCount?: number | null;
+  subscriberCount?: number | null;
+  signupAttribution: {
+    sourceMicroAppId?: Id | null;
+    sourceMicroAppOwnerId?: Id | null;
+    sourcePlatform?: string | null;
+    sourceInstanceId?: Id | null;
+    hasShareCode: boolean;
+    hasAnonymousActorId: boolean;
+  };
+};
+
+type MiniAppGeneration = {
+  _id: Id;
+  microAppId?: Id | null;
+  owner: AdminUser | null;
+  app: { _id: Id; name: string; handle: string; publicationStatus?: string | null; isArchived: boolean } | null;
+  status: string;
+  buildFlowVariant?: "classic" | "nextbuild" | "pipeline_v3" | null;
+  workflowPhase?: string | null;
+  workflowStep?: string | null;
+  progress?: number | null;
+  isEditGeneration: boolean;
+  isAdminRegeneration: boolean;
+  targetCommunityId?: Id | null;
+  targetCommunityContext?: unknown;
+  targetPublicationStatus?: string | null;
+  templateId?: Id | null;
+  promptSummary: unknown;
+  reviewResult?: unknown;
+  pipelineV3?: unknown;
+  error?: string | null;
+  failurePhase?: string | null;
+  generationStartedAt?: TimestampMs | null;
+  completedAt?: TimestampMs | null;
+  buildDurationMs?: number | null;
+  estimatedBuildTimeMs?: number | null;
+  retryCount?: number | null;
+  createdAt: TimestampMs;
+  updatedAt: TimestampMs;
+  publishedAt?: TimestampMs | null;
+};
+
+type MiniAppTriageResult = {
+  _id: Id;
+  runId: string;
+  appId: Id;
+  appName: string;
+  appHandle: string;
+  ok: boolean;
+  severity?: number | null;
+  gapCategory?: "seed_data" | "community_context" | "liveness" | "code_quality" | "none" | "other" | null;
+  nextAction?: string | null;
+  reasoning?: string | null;
+  errorMessage?: string | null;
+  sharedDataBytes?: number | null;
+  sharedDataIsEmpty?: boolean | null;
+  hasCommunity?: boolean | null;
+  statsAtRun?: { installs: number; activeUsers: number; totalSessions: number } | null;
+  actionStatus: "pending" | "done" | "dismissed";
+  feedbackNote?: string | null;
+  feedbackAt?: TimestampMs | null;
+  createdAt: TimestampMs;
+};
 ```
 
 ## `config set`
@@ -170,6 +315,140 @@ Output:
   requestId: string;
 }
 ```
+
+## `admin catalog`
+
+Backend route: `GET /admin/catalog?surface=<surface>`
+
+Required scope: `admin:read`
+
+```bash
+a1zap-admin-agent admin catalog [--surface all]
+```
+
+Output:
+
+```ts
+{
+  generatedAt: TimestampMs;
+  surface: AdminSurface;
+  surfaces: AdminSurfaceCatalogEntry[];
+  redactions: string[];
+}
+```
+
+Use this first when an agent needs to discover which admin data exists. It lists the backing admin pages and the data classes exposed for Growth, communities/campuses, users/signups, mini apps, Social Builders, content/email, student jobs, codes, Sparks, agents, and hosting.
+
+## `admin context`
+
+Backend route: `GET /admin/context?surface=<surface>&limit=<limit>`
+
+Required scope: `admin:read`
+
+```bash
+a1zap-admin-agent admin context [--surface all] [--limit 40]
+```
+
+`research context` is an alias:
+
+```bash
+a1zap-admin-agent research context [--surface social-builders] [--limit 40]
+```
+
+Output:
+
+```ts
+{
+  generatedAt: TimestampMs;
+  surface: AdminSurface;
+  limit: number;
+  catalog: AdminSurfaceCatalogEntry[];
+  contexts: Partial<Record<Exclude<AdminSurface, "all">, unknown>>;
+  redactions: string[];
+}
+```
+
+Context keys by surface:
+
+```ts
+type AdminContexts = {
+  growth?: unknown; // same payload as `growth context --section all`
+  communities?: {
+    communities: Community[];
+    pendingVerifications: Array<{
+      _id: Id;
+      communityId: Id;
+      community: Community | null;
+      user: AdminUser | null;
+      role: string;
+      verificationMethod: string;
+      joinedAt: TimestampMs;
+      lastActiveAt: TimestampMs;
+      hiddenFromList: boolean;
+    }>;
+  };
+  users?: {
+    recentUsers: Array<AdminUser & {
+      primaryCommunity: Community | null;
+      signupSourceMiniApp: MiniApp | null;
+    }>;
+  };
+  "mini-apps"?: { recentMiniApps: MiniApp[] };
+  "mini-app-generations"?: { recentGenerations: MiniAppGeneration[] };
+  "mini-app-triage"?: {
+    latestRun: unknown | null;
+    results: MiniAppTriageResult[];
+    recentFeedbackEvents: unknown[];
+  };
+  "social-builders"?: {
+    community: Community | null;
+    hubContent: unknown;
+    builders: unknown[];
+    officialApps: Array<{ link: unknown; app: MiniApp | null }>;
+    trackedCampuses: {
+      trackedCommunityIds: Id[];
+      campuses: unknown[];
+      communities: Array<Community | null>;
+    };
+    pipelineCandidates: unknown[];
+    socialAccounts: unknown[];
+    trackerEntries: unknown[];
+    recentPosts: unknown[];
+    openTasks: unknown[];
+    recentHours: unknown[];
+    recentContracts: unknown[];
+    recentActivity: unknown[];
+  };
+  content?: {
+    blog: { articles: unknown[]; authors: unknown[] };
+    communityContent: unknown[];
+    transactionalEmails: { adminPages: string[]; note: string };
+  };
+  "student-jobs"?: { jobs: unknown[]; companies: unknown[] };
+  codes?: {
+    inviteCodes: unknown[];
+    redeemCodes: unknown[];
+    recentRedemptions: unknown[];
+  };
+  sparks?: {
+    walletSample: {
+      sampleSize: number;
+      sampleLimited: boolean;
+      totals: Record<string, number>;
+    };
+    recentLedgerEntries: unknown[];
+  };
+  agents?: { agents: unknown[] };
+  hosting?: { projects: unknown[]; services: unknown[] };
+};
+```
+
+Safety notes:
+
+- Mini-app source code is not included here; use `miniapps get --include-code`, which requires `miniapps:code:read`.
+- Invite/redeem code values are masked as `codeMasked`.
+- Social account login details and credential envelopes are replaced by credential-state booleans.
+- Hosting secrets, tokens, and environment variables are intentionally excluded.
 
 ## `growth context`
 

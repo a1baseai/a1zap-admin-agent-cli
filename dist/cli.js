@@ -69,6 +69,9 @@ function printHelp() {
 Usage:
   a1zap-admin-agent config set <key> [--api-url <url>]
   a1zap-admin-agent whoami
+  a1zap-admin-agent admin catalog [--surface all]
+  a1zap-admin-agent admin context [--surface all] [--limit 40]
+  a1zap-admin-agent research context [--surface all] [--limit 40]
   a1zap-admin-agent growth context [--section <name>] [--limit 40]
   a1zap-admin-agent growth summary [--table]
   a1zap-admin-agent miniapps list [--limit 50] [--status all] [--archive all]
@@ -140,6 +143,24 @@ function printMiniAppsTable(result) {
         { key: "owner", label: "owner" },
         { key: "archived", label: "archived" },
     ]);
+}
+async function handleAdmin(args, commandPrefix = "admin") {
+    const [subcommand] = args.positionals;
+    const surface = flagString(args.flags, "surface") ?? "all";
+    if (subcommand === "catalog") {
+        const result = await apiRequest(buildPath("/admin/catalog", { surface }), { command: `${commandPrefix} catalog ${surface}` });
+        printJson(result);
+        return;
+    }
+    if (subcommand === "context") {
+        const result = await apiRequest(buildPath("/admin/context", {
+            surface,
+            limit: flagNumber(args.flags, "limit", 40),
+        }), { command: `${commandPrefix} context ${surface}` });
+        printJson(result);
+        return;
+    }
+    throw new UsageError(`Usage: a1zap-admin-agent ${commandPrefix} catalog|context`);
 }
 async function handleConfig(args) {
     const [subcommand, key] = args.positionals;
@@ -285,6 +306,14 @@ export async function main(argv = process.argv.slice(2)) {
     if (command === "whoami") {
         const result = await apiRequest("/whoami", { command: "whoami" });
         printJson(result);
+        return;
+    }
+    if (command === "admin") {
+        await handleAdmin(args);
+        return;
+    }
+    if (command === "research") {
+        await handleAdmin(args, "research");
         return;
     }
     if (command === "growth") {

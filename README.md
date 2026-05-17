@@ -33,6 +33,9 @@ export A1ZAP_ADMIN_AGENT_API_URL=https://a1zap.com/api/admin-agent-cli
 
 ```bash
 a1zap-admin-agent whoami
+a1zap-admin-agent admin catalog
+a1zap-admin-agent admin context --surface all --limit 40
+a1zap-admin-agent research context --surface social-builders
 a1zap-admin-agent growth context --section all --limit 40
 a1zap-admin-agent growth summary
 a1zap-admin-agent growth summary --table
@@ -55,6 +58,9 @@ Every command's expected request and response shape is documented in [docs/PAYLO
 Short version:
 
 - `whoami` returns the authenticated key, scopes, and request id.
+- `admin catalog` returns the agent-readable list of admin data surfaces, source admin pages, scopes, fields, and redaction rules.
+- `admin context` returns bounded JSON snapshots across Growth, communities, users, mini apps, Social Builders, content, jobs, codes, Sparks, agents, and hosting metadata.
+- `research context` is an alias for `admin context`, intended for research agents and workflows that combine this CLI with tools like postdoc CLI.
 - `growth context` returns full canonical Growth Admin JSON by default.
 - `growth context --section campus-penetration` includes the per-university/community table rows from Growth Admin: targeted status, enrollment, users, penetration, WoW, new users, and trend series.
 - `growth summary` returns a smaller JSON summary derived from `growth context --section overview`.
@@ -69,6 +75,8 @@ Short version:
 This package expects `a1zap-maker` to expose:
 
 - `GET /api/admin-agent-cli/whoami`
+- `GET /api/admin-agent-cli/admin/catalog`
+- `GET /api/admin-agent-cli/admin/context`
 - `GET /api/admin-agent-cli/growth/context`
 - `GET /api/admin-agent-cli/mini-apps`
 - `GET /api/admin-agent-cli/mini-apps/search`

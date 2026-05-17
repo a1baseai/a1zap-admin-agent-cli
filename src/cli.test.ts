@@ -75,3 +75,42 @@ test("actions apply requires explicit --yes", async () => {
   assert.equal(result.code, 2);
   assert.match(result.stderr, /requires --yes/);
 });
+
+test("research context calls admin context endpoint with surface and limit", async () => {
+  const captured: CapturedRequest = {};
+  const server = createServer((request, response) => {
+    captured.method = request.method;
+    captured.url = request.url;
+    captured.command = request.headers["x-a1zap-agent-command"] as string;
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ surface: "social-builders", contexts: {} }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert(address && typeof address === "object");
+
+  try {
+    const result = await runCli(
+      ["research", "context", "--surface", "social-builders", "--limit", "12"],
+      {
+        A1ZAP_ADMIN_AGENT_KEY: "a1zap_admin_testkey",
+        A1ZAP_ADMIN_AGENT_API_URL: `http://127.0.0.1:${address.port}`,
+      },
+    );
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(captured.method, "GET");
+    assert.equal(
+      captured.url,
+      "/admin/context?surface=social-builders&limit=12",
+    );
+    assert.equal(captured.command, "research context social-builders");
+    assert.deepEqual(JSON.parse(result.stdout), {
+      surface: "social-builders",
+      contexts: {},
+    });
+  } finally {
+    server.close();
+  }
+});
