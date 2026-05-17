@@ -56,6 +56,7 @@ Short version:
 
 - `whoami` returns the authenticated key, scopes, and request id.
 - `growth context` returns full canonical Growth Admin JSON by default.
+- `growth context --section campus-penetration` includes the per-university/community table rows from Growth Admin: targeted status, enrollment, users, penetration, WoW, new users, and trend series.
 - `growth summary` returns a smaller JSON summary derived from `growth context --section overview`.
 - `miniapps list/search/get/audit` return mini-app admin read models.
 - `miniapps get --include-code` includes source bundle fields and requires the backend `miniapps:code:read` scope.

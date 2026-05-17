@@ -295,7 +295,46 @@ type GrowthCampusPenetrationMetric = GrowthMetricBase & {
   campusCount: number;
   targetedCampusCount: number;
   enrolledCampusCount: number;
-  campuses: Array<Record<string, unknown>>;
+  campuses: CampusGrowthRow[];
+};
+
+type CampusGrowthRow = {
+  // Convex vettedCommunities id. Use this as the stable target id.
+  communityId: Id;
+  name: string;
+  handle: string;
+  logoUrl?: string;
+  state?: string;
+  targeted: boolean;
+  enrollment: {
+    total: number;
+    asOfYear?: number;
+    source?: string;
+    sourceUrl?: string;
+    updatedAt?: TimestampMs;
+    updatedBy?: Id;
+    notes?: string;
+  };
+  currentUsers: number;
+  penetration: number;
+  weekOverWeekChange: number;
+  currentWeekNewUsers: number;
+  previousWeekNewUsers: number;
+  current24hNewUsers: number;
+  previous24hNewUsers: number;
+  lastWeek24hNewUsers: number;
+  // This powers the row sparkline/trend shown in Growth Admin.
+  series: CampusGrowthSeriesPoint[];
+};
+
+type CampusGrowthSeriesPoint = {
+  dateKey: string;
+  startTimestamp: TimestampMs;
+  endTimestamp: TimestampMs;
+  value: number;
+  newUsers: number;
+  penetration: number;
+  weekOverWeekChange: number;
 };
 
 type GrowthSocialBuildersMetric = GrowthMetricBase & {
@@ -361,6 +400,53 @@ Filtered section outputs:
 // --section ai-orchestrator
 { section: "ai-orchestrator"; generatedAt: TimestampMs; aiOrchestrator: AiOrchestratorContext; }
 ```
+
+Campus penetration usage:
+
+```bash
+a1zap-admin-agent growth context --section campus-penetration
+```
+
+Read `campusPenetration.campuses` for the data shown in the Growth Admin table:
+
+```ts
+{
+  campusPenetration: {
+    currentUsers: 1194;
+    totalEnrollment: 388985;
+    value: 0.00307;
+    targetedCampusCount: 7;
+    enrolledCampusCount: 10;
+    campuses: [
+      {
+        communityId: "k...";
+        name: "UNSW";
+        handle: "unsw";
+        logoUrl: "https://...";
+        targeted: true;
+        enrollment: { total: 64053, asOfYear: 2024 };
+        currentUsers: 543;
+        penetration: 0.00848;
+        weekOverWeekChange: 0.017;
+        currentWeekNewUsers: 9;
+        series: [
+          {
+            dateKey: "2026-05-17";
+            value: 543;
+            newUsers: 9;
+            penetration: 0.00848;
+            weekOverWeekChange: 0.017;
+            startTimestamp: 1778400000000;
+            endTimestamp: 1779004799999;
+          }
+        ];
+      }
+    ];
+  }
+}
+```
+
+In the current backend contract, this section is university/campus-focused: active academic communities with `subCategory = "university"` and official enrollment. City or non-university community penetration can be added as a new section once the maker Growth Admin read model exposes those rows.
 
 AI orchestrator context:
 
