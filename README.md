@@ -48,6 +48,21 @@ a1zap-admin-agent actions cancel <auditEntryId>
 
 Default output is full JSON for agents. `growth summary` and `--table` are convenience views only.
 
+## JSON Payloads
+
+Every command's expected request and response shape is documented in [docs/PAYLOADS.md](docs/PAYLOADS.md).
+
+Short version:
+
+- `whoami` returns the authenticated key, scopes, and request id.
+- `growth context` returns full canonical Growth Admin JSON by default.
+- `growth summary` returns a smaller JSON summary derived from `growth context --section overview`.
+- `miniapps list/search/get/audit` return mini-app admin read models.
+- `miniapps get --include-code` includes source bundle fields and requires the backend `miniapps:code:read` scope.
+- `actions propose` returns a proposal with an `auditEntryId`.
+- `actions apply` only accepts `auditEntryId` plus `--yes`; action payloads are loaded from the stored audit entry.
+- `actions cancel` marks a stored proposal cancelled.
+
 ## Required Backend
 
 This package expects `a1zap-maker` to expose:
