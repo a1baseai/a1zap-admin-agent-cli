@@ -44,6 +44,17 @@ a1zap-admin-agent miniapps search "campus"
 a1zap-admin-agent miniapps get <id-or-handle>
 a1zap-admin-agent miniapps get <id-or-handle> --include-code
 a1zap-admin-agent miniapps audit <id-or-handle>
+a1zap-admin-agent sessions list <app-id-or-handle> --canonical
+a1zap-admin-agent sessions context <app-id-or-handle>
+a1zap-admin-agent sessions canonical <app-id-or-handle>
+a1zap-admin-agent sessions get <instanceId>
+a1zap-admin-agent sessions data download <instanceId> --out session.json
+a1zap-admin-agent sessions data validate --file session.json
+a1zap-admin-agent sessions data upload <instanceId> --file session.json --yes
+a1zap-admin-agent sessions data upload <instanceId> --file session.json --yes --allow-canonical
+a1zap-admin-agent sessions backups list <instanceId>
+a1zap-admin-agent sessions backups create <instanceId> --note "before edit"
+a1zap-admin-agent sessions backups restore <instanceId> <backupId> --yes
 a1zap-admin-agent actions propose "update this app metadata..."
 a1zap-admin-agent actions apply <auditEntryId> --yes
 a1zap-admin-agent actions cancel <auditEntryId>
@@ -59,13 +70,17 @@ Short version:
 
 - `whoami` returns the authenticated key, scopes, and request id.
 - `admin catalog` returns the agent-readable list of admin data surfaces, source admin pages, scopes, fields, and redaction rules.
-- `admin context` returns bounded JSON snapshots across Growth, communities, users, mini apps, Social Builders, content, jobs, codes, Sparks, agents, and hosting metadata.
+- `admin context` returns bounded JSON snapshots across Growth, communities, users, mini apps, Social Builders, content, jobs, codes, Sparks, agents, hosting metadata, projects, tasks, and compact company state.
 - `research context` is an alias for `admin context`, intended for research agents and workflows that combine this CLI with tools like postdoc CLI.
 - `growth context` returns full canonical Growth Admin JSON by default.
 - `growth context --section campus-penetration` includes the per-university/community table rows from Growth Admin: targeted status, enrollment, users, penetration, WoW, new users, and trend series.
 - `growth summary` returns a smaller JSON summary derived from `growth context --section overview`.
 - `miniapps list/search/get/audit` return mini-app admin read models.
 - `miniapps get --include-code` includes source bundle fields and requires the backend `miniapps:code:read` scope.
+- `sessions list/context/canonical/get` expose mini-app session rows, canonical routing, approved community assignments, shared-data versions, member counts, and safe owner/community context.
+- `sessions data download` returns an editable `a1zap.microAppSessionData.v1` envelope. Only the `data` property should be edited.
+- `sessions data upload` requires `--yes`, writes only through the stored envelope, creates a backup first, checks the downloaded `sharedDataVersion`, and requires `--allow-canonical` for canonical sessions.
+- `sessions backups` lists, creates, and restores session shared-data backups. Restores require `sessions:restore` and `--yes`.
 - `actions propose` returns a proposal with an `auditEntryId`.
 - `actions apply` only accepts `auditEntryId` plus `--yes`; action payloads are loaded from the stored audit entry.
 - `actions cancel` marks a stored proposal cancelled.
@@ -82,6 +97,16 @@ This package expects `a1zap-maker` to expose:
 - `GET /api/admin-agent-cli/mini-apps/search`
 - `GET /api/admin-agent-cli/mini-apps/:appId`
 - `GET /api/admin-agent-cli/mini-apps/:appId/audit`
+- `GET /api/admin-agent-cli/mini-apps/:appId/sessions`
+- `GET /api/admin-agent-cli/mini-apps/:appId/session-management`
+- `GET /api/admin-agent-cli/mini-apps/:appId/canonical-sessions`
+- `GET /api/admin-agent-cli/sessions/:instanceId`
+- `GET /api/admin-agent-cli/sessions/:instanceId/data`
+- `POST /api/admin-agent-cli/sessions/:instanceId/data/validate`
+- `POST /api/admin-agent-cli/sessions/:instanceId/data/upload`
+- `GET /api/admin-agent-cli/sessions/:instanceId/backups`
+- `POST /api/admin-agent-cli/sessions/:instanceId/backups`
+- `POST /api/admin-agent-cli/sessions/:instanceId/backups/:backupId/restore`
 - `POST /api/admin-agent-cli/actions/propose`
 - `POST /api/admin-agent-cli/actions/:auditEntryId/apply`
 - `POST /api/admin-agent-cli/actions/:auditEntryId/cancel`

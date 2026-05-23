@@ -1,3 +1,7 @@
+import { spawn } from "node:child_process";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { readConfig, writeConfig } from "./config.js";
 import { ApiError, apiRequest } from "./http.js";
 import { compactNumber, compactPercent, printJson, printTable, } from "./format.js";
@@ -78,6 +82,17 @@ Usage:
   a1zap-admin-agent miniapps search <query> [--limit 50]
   a1zap-admin-agent miniapps get <id-or-handle> [--include-code]
   a1zap-admin-agent miniapps audit <id-or-handle> [--limit 10]
+  a1zap-admin-agent sessions list <app-id-or-handle> [--limit 50] [--canonical]
+  a1zap-admin-agent sessions context <app-id-or-handle> [--limit 100]
+  a1zap-admin-agent sessions canonical <app-id-or-handle> [--limit 50]
+  a1zap-admin-agent sessions get <instanceId>
+  a1zap-admin-agent sessions data download <instanceId> [--out session.json]
+  a1zap-admin-agent sessions data edit <instanceId> [--editor "$EDITOR"] [--allow-canonical] [--confirm-shrink]
+  a1zap-admin-agent sessions data validate --file session.json
+  a1zap-admin-agent sessions data upload <instanceId> --file session.json --yes [--allow-canonical] [--confirm-shrink]
+  a1zap-admin-agent sessions backups list <instanceId> [--limit 25]
+  a1zap-admin-agent sessions backups create <instanceId> [--note "..."]
+  a1zap-admin-agent sessions backups restore <instanceId> <backupId> --yes [--source instance_data|social_builder_canonical] [--allow-canonical]
   a1zap-admin-agent actions propose "<prompt>"
   a1zap-admin-agent actions apply <auditEntryId> --yes
   a1zap-admin-agent actions cancel <auditEntryId>
@@ -143,6 +158,87 @@ function printMiniAppsTable(result) {
         { key: "owner", label: "owner" },
         { key: "archived", label: "archived" },
     ]);
+}
+function printSessionsTable(result) {
+    const sessions = result.sessions ?? result.canonicalSessions ?? [];
+    printTable(sessions.map((session) => ({
+        id: session.instanceId,
+        name: session.name,
+        source: session.source,
+        status: session.status,
+        canonical: session.isCanonical ? session.canonicalRole : "",
+        version: session.sharedDataVersion,
+        members: session.memberCount,
+        updatedAt: session.updatedAt,
+    })), [
+        { key: "id", label: "id" },
+        { key: "name", label: "name" },
+        { key: "source", label: "source" },
+        { key: "status", label: "status" },
+        { key: "canonical", label: "canonical" },
+        { key: "version", label: "version" },
+        { key: "members", label: "members" },
+        { key: "updatedAt", label: "updatedAt" },
+    ]);
+}
+function printBackupsTable(result) {
+    const backups = result.backups ?? [];
+    printTable(backups.map((backup) => ({
+        id: backup.backupId,
+        source: backup.source,
+        label: backup.sourceLabel,
+        version: backup.sharedDataVersion,
+        restorable: backup.restorable ? "yes" : "no",
+        selected: backup.sourceInstanceMatchesSelected ? "yes" : "",
+        backedUpAt: backup.backedUpAtIso ?? backup.backedUpAt,
+    })), [
+        { key: "id", label: "id" },
+        { key: "source", label: "source" },
+        { key: "label", label: "label" },
+        { key: "version", label: "version" },
+        { key: "restorable", label: "restorable" },
+        { key: "selected", label: "selected" },
+        { key: "backedUpAt", label: "backedUpAt" },
+    ]);
+}
+async function readJsonFile(filePath) {
+    const raw = await readFile(filePath, "utf8");
+    try {
+        return JSON.parse(raw);
+    }
+    catch (error) {
+        throw new UsageError(`Invalid JSON in ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+async function writeJsonFile(filePath, value) {
+    await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+function getEnvelopeInstanceId(envelope) {
+    const instanceId = envelope?.session?.instanceId ?? envelope?.session?._id;
+    if (typeof instanceId !== "string" || !instanceId) {
+        throw new UsageError("Session data envelope is missing session.instanceId");
+    }
+    return instanceId;
+}
+function requireFileFlag(flags) {
+    return requirePositional(flagString(flags, "file"), "--file");
+}
+function runEditor(editor, filePath) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(`${editor} ${JSON.stringify(filePath)}`, {
+            shell: true,
+            stdio: "inherit",
+        });
+        child.on("error", reject);
+        child.on("close", (code) => {
+            if (code === 0) {
+                resolve();
+            }
+            else {
+                reject(new UsageError(`Editor exited with code ${code}`));
+            }
+        });
+    });
 }
 async function handleAdmin(args, commandPrefix = "admin") {
     const [subcommand] = args.positionals;
@@ -254,6 +350,183 @@ async function handleMiniApps(args) {
     }
     throw new UsageError("Usage: a1zap-admin-agent miniapps list|search|get|audit");
 }
+async function handleSessionData(args) {
+    const [subcommand, ...rest] = args.positionals;
+    if (subcommand === "download") {
+        const instanceId = requirePositional(rest[0], "instanceId");
+        const result = await apiRequest(`/sessions/${encodeURIComponent(instanceId)}/data`, { command: "sessions data download" });
+        const outPath = flagString(args.flags, "out");
+        if (outPath) {
+            await writeJsonFile(outPath, result);
+            printJson({
+                ok: true,
+                path: outPath,
+                instanceId,
+                base: result?.base,
+            });
+        }
+        else {
+            printJson(result);
+        }
+        return;
+    }
+    if (subcommand === "validate") {
+        const filePath = requireFileFlag(args.flags);
+        const envelope = await readJsonFile(filePath);
+        const instanceId = flagString(args.flags, "instance") ?? getEnvelopeInstanceId(envelope);
+        const result = await apiRequest(`/sessions/${encodeURIComponent(instanceId)}/data/validate`, {
+            method: "POST",
+            body: { envelope },
+            command: "sessions data validate",
+        });
+        printJson(result);
+        return;
+    }
+    if (subcommand === "upload") {
+        const instanceId = requirePositional(rest[0], "instanceId");
+        const filePath = requireFileFlag(args.flags);
+        if (!hasFlag(args.flags, "yes")) {
+            throw new UsageError("sessions data upload requires --yes");
+        }
+        const envelope = await readJsonFile(filePath);
+        const result = await apiRequest(`/sessions/${encodeURIComponent(instanceId)}/data/upload`, {
+            method: "POST",
+            body: {
+                yes: true,
+                envelope,
+                allowCanonical: hasFlag(args.flags, "allow-canonical"),
+                confirmShrink: hasFlag(args.flags, "confirm-shrink"),
+            },
+            command: "sessions data upload",
+        });
+        printJson(result);
+        return;
+    }
+    if (subcommand === "edit") {
+        const instanceId = requirePositional(rest[0], "instanceId");
+        const editor = flagString(args.flags, "editor") ?? process.env.EDITOR;
+        if (!editor) {
+            throw new UsageError("sessions data edit requires --editor or EDITOR");
+        }
+        const envelope = await apiRequest(`/sessions/${encodeURIComponent(instanceId)}/data`, { command: "sessions data edit download" });
+        const directory = await mkdtemp(join(tmpdir(), "a1zap-session-"));
+        const filePath = join(directory, `${instanceId}.session.json`);
+        await writeJsonFile(filePath, envelope);
+        await runEditor(editor, filePath);
+        const editedEnvelope = await readJsonFile(filePath);
+        const result = await apiRequest(`/sessions/${encodeURIComponent(instanceId)}/data/upload`, {
+            method: "POST",
+            body: {
+                yes: true,
+                envelope: editedEnvelope,
+                allowCanonical: hasFlag(args.flags, "allow-canonical"),
+                confirmShrink: hasFlag(args.flags, "confirm-shrink"),
+            },
+            command: "sessions data edit upload",
+        });
+        printJson({ ...result, editedFile: filePath });
+        return;
+    }
+    throw new UsageError("Usage: a1zap-admin-agent sessions data download|edit|validate|upload");
+}
+async function handleSessionBackups(args) {
+    const [subcommand, ...rest] = args.positionals;
+    if (subcommand === "list") {
+        const instanceId = requirePositional(rest[0], "instanceId");
+        const result = await apiRequest(buildPath(`/sessions/${encodeURIComponent(instanceId)}/backups`, {
+            limit: flagNumber(args.flags, "limit", 25),
+        }), { command: "sessions backups list" });
+        if (hasFlag(args.flags, "table")) {
+            printBackupsTable(result);
+        }
+        else {
+            printJson(result);
+        }
+        return;
+    }
+    if (subcommand === "create") {
+        const instanceId = requirePositional(rest[0], "instanceId");
+        const result = await apiRequest(`/sessions/${encodeURIComponent(instanceId)}/backups`, {
+            method: "POST",
+            body: { note: flagString(args.flags, "note") },
+            command: "sessions backups create",
+        });
+        printJson(result);
+        return;
+    }
+    if (subcommand === "restore") {
+        const instanceId = requirePositional(rest[0], "instanceId");
+        const backupId = requirePositional(rest[1], "backupId");
+        if (!hasFlag(args.flags, "yes")) {
+            throw new UsageError("sessions backups restore requires --yes");
+        }
+        const result = await apiRequest(`/sessions/${encodeURIComponent(instanceId)}/backups/${encodeURIComponent(backupId)}/restore`, {
+            method: "POST",
+            body: {
+                yes: true,
+                source: flagString(args.flags, "source") ?? "instance_data",
+                allowCanonical: hasFlag(args.flags, "allow-canonical"),
+            },
+            command: "sessions backups restore",
+        });
+        printJson(result);
+        return;
+    }
+    throw new UsageError("Usage: a1zap-admin-agent sessions backups list|create|restore");
+}
+async function handleSessions(args) {
+    const [subcommand, ...rest] = args.positionals;
+    if (subcommand === "list") {
+        const selector = requirePositional(rest[0], "app-id-or-handle");
+        const result = await apiRequest(buildPath(`/mini-apps/${encodeURIComponent(selector)}/sessions`, {
+            limit: flagNumber(args.flags, "limit", 50),
+            canonical: hasFlag(args.flags, "canonical") || undefined,
+        }), { command: "sessions list" });
+        if (hasFlag(args.flags, "table")) {
+            printSessionsTable(result);
+        }
+        else {
+            printJson(result);
+        }
+        return;
+    }
+    if (subcommand === "context") {
+        const selector = requirePositional(rest[0], "app-id-or-handle");
+        const result = await apiRequest(buildPath(`/mini-apps/${encodeURIComponent(selector)}/session-management`, {
+            limit: flagNumber(args.flags, "limit", 100),
+        }), { command: "sessions context" });
+        printJson(result);
+        return;
+    }
+    if (subcommand === "canonical") {
+        const selector = requirePositional(rest[0], "app-id-or-handle");
+        const result = await apiRequest(buildPath(`/mini-apps/${encodeURIComponent(selector)}/canonical-sessions`, {
+            limit: flagNumber(args.flags, "limit", 50),
+        }), { command: "sessions canonical" });
+        if (hasFlag(args.flags, "table")) {
+            printSessionsTable(result);
+        }
+        else {
+            printJson(result);
+        }
+        return;
+    }
+    if (subcommand === "get") {
+        const instanceId = requirePositional(rest[0], "instanceId");
+        const result = await apiRequest(`/sessions/${encodeURIComponent(instanceId)}`, { command: "sessions get" });
+        printJson(result);
+        return;
+    }
+    if (subcommand === "data") {
+        await handleSessionData({ ...args, positionals: rest });
+        return;
+    }
+    if (subcommand === "backups") {
+        await handleSessionBackups({ ...args, positionals: rest });
+        return;
+    }
+    throw new UsageError("Usage: a1zap-admin-agent sessions list|context|canonical|get|data|backups");
+}
 async function handleActions(args) {
     const [subcommand, ...rest] = args.positionals;
     if (subcommand === "propose") {
@@ -322,6 +595,10 @@ export async function main(argv = process.argv.slice(2)) {
     }
     if (command === "miniapps") {
         await handleMiniApps(args);
+        return;
+    }
+    if (command === "sessions") {
+        await handleSessions(args);
         return;
     }
     if (command === "actions") {

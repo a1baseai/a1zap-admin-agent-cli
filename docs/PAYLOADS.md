@@ -46,7 +46,6 @@ type Owner = {
   id?: Id;
   _id?: Id;
   displayName?: string | null;
-  email?: string | null;
   handle?: string | null;
   profileImageUrl?: string | null;
 };
@@ -115,6 +114,81 @@ type MiniApp = {
       };
 };
 
+type SessionSource = "global" | "community" | "group" | "agent" | "private";
+type CanonicalRole = "global" | "community" | "none";
+
+type MiniAppSession = {
+  instanceId: Id;
+  _id: Id;
+  microAppId: Id;
+  name: string;
+  status: "active" | "archived";
+  source: SessionSource;
+  community: {
+    id: Id;
+    _id: Id;
+    name: string;
+    displayName: string;
+    handle: string;
+    logoUrl?: string | null;
+  } | null;
+  communityId?: Id | null;
+  groupId?: Id | null;
+  agentId?: Id | null;
+  isGlobalInstance: boolean;
+  isCanonical: boolean;
+  isResolvedCanonical: boolean;
+  canonicalRole: CanonicalRole;
+  canonicalRoutingScope: "global" | "community";
+  canonicalCommunityId?: Id | null;
+  sharedDataVersion: number;
+  sharedDataPresent: boolean;
+  sharedDataSizeBytes: number | null;
+  computedAggregatesPresent: boolean;
+  computedAggregatesComputedAt?: TimestampMs | null;
+  memberCount: number;
+  owner: Owner | null;
+  createdAt: TimestampMs;
+  updatedAt: TimestampMs;
+};
+
+type SessionDataEnvelope = {
+  kind: "a1zap.microAppSessionData.v1";
+  downloadedAt: string;
+  app: {
+    id: Id;
+    _id: Id;
+    handle: string;
+    name: string;
+  };
+  session: MiniAppSession;
+  base: {
+    sharedDataVersion: number;
+    sharedDataPresent: boolean;
+    dataHash: string;
+  };
+  data: unknown;
+};
+
+type SessionBackup = {
+  source: "instance_data" | "social_builder_canonical";
+  backupId: Id;
+  sourceLabel: string;
+  status: string;
+  restorable: boolean;
+  backedUpAt: TimestampMs;
+  backedUpAtIso: string;
+  backupVersion: number;
+  sharedDataVersion: number;
+  sharedDataPresent: boolean;
+  sharedDataSizeBytes: number | null;
+  sourceInstanceId: Id | null;
+  sourceInstanceName: string | null;
+  sourceInstanceMatchesSelected: boolean;
+  note: string | null;
+  backedUpBy: null;
+};
+
 type AdminSurface =
   | "all"
   | "growth"
@@ -129,7 +203,10 @@ type AdminSurface =
   | "codes"
   | "sparks"
   | "agents"
-  | "hosting";
+  | "hosting"
+  | "projects"
+  | "tasks"
+  | "company-state";
 
 type AdminSurfaceCatalogEntry = {
   surface: Exclude<AdminSurface, "all">;
@@ -440,6 +517,21 @@ type AdminContexts = {
   };
   agents?: { agents: unknown[] };
   hosting?: { projects: unknown[]; services: unknown[] };
+  projects?: { projects: unknown[] };
+  tasks?: {
+    tasks: unknown[];
+    overdueTasks: unknown[];
+    openHighPriorityTasks: unknown[];
+  };
+  "company-state"?: {
+    generatedAt: TimestampMs;
+    growth: unknown;
+    projects: unknown;
+    tasks: unknown;
+    miniAppTriage: unknown;
+    socialBuilders: unknown;
+    hosting: unknown;
+  };
 };
 ```
 
@@ -977,6 +1069,339 @@ JSON output:
     createdAt: TimestampMs;
     updatedAt: TimestampMs;
   }>;
+}
+```
+
+## `sessions list`
+
+Backend route: `GET /mini-apps/:appId/sessions`
+
+Required scope: `sessions:read`
+
+```bash
+a1zap-admin-agent sessions list <app-id-or-handle> [--limit 50] [--canonical] [--table]
+```
+
+JSON output:
+
+```ts
+{
+  app: MiniApp;
+  generatedAt: TimestampMs;
+  sessions: MiniAppSession[];
+  count: number;
+  filters: {
+    canonicalOnly: boolean;
+    limit: number;
+  };
+  canonicalRouting: {
+    canonicalInstanceId: Id | null;
+    canonicalReady: boolean;
+    canonicalCommunityId: Id | null;
+    scope: "global" | "community";
+  };
+}
+```
+
+## `sessions context`
+
+Backend route: `GET /mini-apps/:appId/session-management`
+
+Required scope: `sessions:read`
+
+```bash
+a1zap-admin-agent sessions context <app-id-or-handle> [--limit 100]
+```
+
+JSON output includes session policy, canonical routing, approved community assignments, and session rows:
+
+```ts
+{
+  app: MiniApp;
+  generatedAt: TimestampMs;
+  sessionManagement: {
+    appId: Id;
+    globalCanonicalInstanceId: Id | null;
+    sessionPolicy: Record<string, unknown>;
+    canonicalRouting: Record<string, unknown>;
+    approvedCommunityAssignments: Array<{
+      communityId: Id;
+      communityName: string;
+      communityHandle?: string | null;
+      communityLogoUrl?: string | null;
+      communityInstanceId?: Id | null;
+      isFeatured: boolean;
+      usageStats?: Record<string, unknown> | null;
+    }>;
+    sessions: MiniAppSession[];
+  };
+}
+```
+
+## `sessions canonical`
+
+Backend route: `GET /mini-apps/:appId/canonical-sessions`
+
+Required scope: `sessions:read`
+
+```bash
+a1zap-admin-agent sessions canonical <app-id-or-handle> [--limit 50] [--table]
+```
+
+JSON output:
+
+```ts
+{
+  app: MiniApp;
+  generatedAt: TimestampMs;
+  sessions: MiniAppSession[];
+  canonicalSessions: MiniAppSession[];
+  count: number;
+  filters: { canonicalOnly: true; limit: number };
+  canonicalRouting: Record<string, unknown>;
+}
+```
+
+## `sessions get`
+
+Backend route: `GET /sessions/:instanceId`
+
+Required scope: `sessions:read`
+
+```bash
+a1zap-admin-agent sessions get <instanceId>
+```
+
+JSON output:
+
+```ts
+{
+  app: MiniApp;
+  session: MiniAppSession;
+  canonicalRouting: Record<string, unknown>;
+  generatedAt: TimestampMs;
+}
+```
+
+## `sessions data download`
+
+Backend route: `GET /sessions/:instanceId/data`
+
+Required scope: `sessions:data:read`
+
+```bash
+a1zap-admin-agent sessions data download <instanceId> --out session.json
+```
+
+Without `--out`, stdout is the full editable envelope:
+
+```ts
+SessionDataEnvelope
+```
+
+With `--out`, the envelope is written to disk and stdout is:
+
+```ts
+{
+  ok: true;
+  path: string;
+  instanceId: Id;
+  base: SessionDataEnvelope["base"];
+}
+```
+
+Only `data` should be edited. `base.sharedDataVersion` and `base.dataHash` are used for upload conflict checks.
+
+## `sessions data validate`
+
+Backend route: `POST /sessions/:instanceId/data/validate`
+
+Required scope: `sessions:data:read`
+
+```bash
+a1zap-admin-agent sessions data validate --file session.json
+```
+
+Request body sent by CLI:
+
+```ts
+{
+  envelope: SessionDataEnvelope;
+}
+```
+
+JSON output:
+
+```ts
+{
+  ok: true;
+  generatedAt: TimestampMs;
+  session: MiniAppSession;
+  validation: {
+    dataSizeBytes: number;
+    maxDepth: number;
+    baseVersion: number;
+    currentVersion: number;
+    versionMatches: boolean;
+    baseDataHash: string | null;
+    currentDataHash: string;
+    dataHashMatches: boolean;
+  };
+}
+```
+
+## `sessions data upload`
+
+Backend route: `POST /sessions/:instanceId/data/upload`
+
+Required scope: `sessions:data:write`
+
+```bash
+a1zap-admin-agent sessions data upload <instanceId> --file session.json --yes [--allow-canonical] [--confirm-shrink]
+```
+
+Request body sent by CLI:
+
+```ts
+{
+  yes: true;
+  envelope: SessionDataEnvelope;
+  allowCanonical: boolean;
+  confirmShrink: boolean;
+}
+```
+
+Upload creates a backup first, rejects stale `sharedDataVersion` or `dataHash`, requires `--allow-canonical` for canonical sessions, and requires `--confirm-shrink` when top-level keys are removed.
+
+JSON output:
+
+```ts
+{
+  success: true;
+  instanceId: Id;
+  appId: Id;
+  backupId: Id;
+  previousVersion: number;
+  version: number;
+  sharedDataSizeBytes: number;
+  dataHashBefore: string;
+  dataHashAfter: string;
+  isCanonical: boolean;
+  canonicalRole: CanonicalRole;
+}
+```
+
+Version conflicts return HTTP `409` and CLI exit code `1`.
+
+## `sessions data edit`
+
+Backend routes: `GET /sessions/:instanceId/data`, then `POST /sessions/:instanceId/data/upload`
+
+Required scopes: `sessions:data:read`, `sessions:data:write`
+
+```bash
+a1zap-admin-agent sessions data edit <instanceId> --editor "$EDITOR" [--allow-canonical] [--confirm-shrink]
+```
+
+The CLI downloads a session envelope to a temp file, opens the configured editor, then uploads the edited envelope with the same safety checks as `sessions data upload`.
+
+## `sessions backups list`
+
+Backend route: `GET /sessions/:instanceId/backups`
+
+Required scope: `sessions:backups:read`
+
+```bash
+a1zap-admin-agent sessions backups list <instanceId> [--limit 25] [--table]
+```
+
+JSON output:
+
+```ts
+{
+  app: { id: Id; _id: Id; handle: string; name: string };
+  session: MiniAppSession;
+  currentSharedDataVersion: number;
+  backups: SessionBackup[];
+  count: number;
+}
+```
+
+## `sessions backups create`
+
+Backend route: `POST /sessions/:instanceId/backups`
+
+Required scope: `sessions:backups:write`
+
+```bash
+a1zap-admin-agent sessions backups create <instanceId> [--note "..."]
+```
+
+Request body sent by CLI:
+
+```ts
+{
+  note?: string;
+}
+```
+
+JSON output:
+
+```ts
+{
+  success: true;
+  backupId: Id;
+  appId: Id;
+  instanceId: Id;
+  backedUpAt: TimestampMs;
+  sharedDataVersion: number;
+  sharedDataPresent: boolean;
+  dataHash: string;
+}
+```
+
+## `sessions backups restore`
+
+Backend route: `POST /sessions/:instanceId/backups/:backupId/restore`
+
+Required scope: `sessions:restore`
+
+```bash
+a1zap-admin-agent sessions backups restore <instanceId> <backupId> --yes [--source instance_data|social_builder_canonical] [--allow-canonical]
+```
+
+Request body sent by CLI:
+
+```ts
+{
+  yes: true;
+  source: "instance_data" | "social_builder_canonical";
+  allowCanonical: boolean;
+}
+```
+
+The backend creates a safety backup of the current target session before applying the restore. Canonical sessions require `--allow-canonical`.
+
+JSON output:
+
+```ts
+{
+  success: true;
+  instanceId: Id;
+  appId: Id;
+  previousVersion: number;
+  version: number;
+  restoredFrom: {
+    source: "instance_data" | "social_builder_canonical";
+    backupId: Id;
+    sourceInstanceId: Id | null;
+  };
+  safetyBackupId: Id;
+  sharedDataSizeBytes: number;
+  dataHashBefore: string;
+  dataHashAfter: string;
+  isCanonical: boolean;
+  canonicalRole: CanonicalRole;
 }
 ```
 
