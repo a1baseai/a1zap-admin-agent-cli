@@ -1,7 +1,7 @@
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-export const DEFAULT_API_URL = "https://a1zap.com/api/admin-agent-cli";
+export const DEFAULT_API_URL = "https://www.a1zap.com/api/admin-agent-cli";
 export function getConfigPath() {
     return (process.env.A1ZAP_ADMIN_AGENT_CONFIG ||
         join(homedir(), ".a1zap", "admin-agent", "config.json"));

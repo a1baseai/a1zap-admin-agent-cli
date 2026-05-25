@@ -7,7 +7,7 @@ export type AdminAgentConfig = {
   apiUrl?: string;
 };
 
-export const DEFAULT_API_URL = "https://a1zap.com/api/admin-agent-cli";
+export const DEFAULT_API_URL = "https://www.a1zap.com/api/admin-agent-cli";
 
 export function getConfigPath() {
   return (

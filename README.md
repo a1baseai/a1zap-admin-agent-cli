@@ -26,7 +26,7 @@ Environment variables override local config:
 
 ```bash
 export A1ZAP_ADMIN_AGENT_KEY=a1zap_admin_your_key_here
-export A1ZAP_ADMIN_AGENT_API_URL=https://a1zap.com/api/admin-agent-cli
+export A1ZAP_ADMIN_AGENT_API_URL=https://www.a1zap.com/api/admin-agent-cli
 ```
 
 ## Commands

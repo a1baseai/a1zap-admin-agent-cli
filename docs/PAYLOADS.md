@@ -352,7 +352,7 @@ Writes:
 // ~/.a1zap/admin-agent/config.json
 {
   "apiKey": "a1zap_admin_...",
-  "apiUrl": "https://a1zap.com/api/admin-agent-cli"
+  "apiUrl": "https://www.a1zap.com/api/admin-agent-cli"
 }
 ```
 
