@@ -58,6 +58,15 @@ a1zap-admin-agent sessions backups restore <instanceId> <backupId> --yes
 a1zap-admin-agent actions propose "update this app metadata..."
 a1zap-admin-agent actions apply <auditEntryId> --yes
 a1zap-admin-agent actions cancel <auditEntryId>
+a1zap-admin-agent doctor --needs admin:read,actions:propose
+a1zap-admin-agent jobs list --country AU --status active --limit 100
+a1zap-admin-agent jobs import --file roles.csv --dry-run
+a1zap-admin-agent jobs qa set <jobId> --score 4 --recommendation accept --yes
+a1zap-admin-agent jobs lane set <jobId> --lane scraped_student_job --yes
+a1zap-admin-agent ugc leads upsert --file ugc-leads.csv --dry-run
+a1zap-admin-agent outreach targets upsert --file employer-targets.csv --dry-run
+a1zap-admin-agent summer-in links create --employer <targetId> --campaign summer_in_2026 --channel email --dry-run
+a1zap-admin-agent projects super-list --status active
 ```
 
 Default output is full JSON for agents. `growth summary` and `--table` are convenience views only.
@@ -65,6 +74,8 @@ Default output is full JSON for agents. `growth summary` and `--table` are conve
 ## JSON Payloads
 
 Every command's expected request and response shape is documented in [docs/PAYLOADS.md](docs/PAYLOADS.md).
+
+Agent operations gaps for Student Jobs, UGC, Summer In outreach, project tasks, and agent workspace commands are tracked in [docs/AGENT_OPERATIONS_GAPS.md](docs/AGENT_OPERATIONS_GAPS.md).
 
 Short version:
 
@@ -84,6 +95,8 @@ Short version:
 - `actions propose` returns a proposal with an `auditEntryId`.
 - `actions apply` only accepts `auditEntryId` plus `--yes`; action payloads are loaded from the stored audit entry.
 - `actions cancel` marks a stored proposal cancelled.
+- `doctor` checks auth, scopes, API URL, and request ID without printing the raw key.
+- `jobs`, `ugc`, `outreach`, `summer-in`, and `projects` commands are agent operations surfaces for the newer backend contract. Mutating commands require `--dry-run` or `--yes`.
 
 ## Required Backend
 
@@ -110,6 +123,8 @@ This package expects `a1zap-maker` to expose:
 - `POST /api/admin-agent-cli/actions/propose`
 - `POST /api/admin-agent-cli/actions/:auditEntryId/apply`
 - `POST /api/admin-agent-cli/actions/:auditEntryId/cancel`
+
+Agent-operations backend routes are documented in [docs/AGENT_OPERATIONS_GAPS.md](docs/AGENT_OPERATIONS_GAPS.md). These include `/jobs`, `/ugc`, `/outreach`, `/summer-in`, and `/projects` route groups.
 
 Admin-agent keys are created/revoked from signed-in system-admin routes in maker. Raw keys are shown once; only hashes are stored in Convex.
 

@@ -283,3 +283,217 @@ test("sessions data download writes envelope to --out path", async () => {
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("doctor reports missing requested scopes", async () => {
+  const server = createServer((_request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(
+      JSON.stringify({
+        ok: true,
+        key: { scopes: ["admin:read", "growth:read"] },
+        requestId: "req_123",
+      }),
+    );
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert(address && typeof address === "object");
+
+  try {
+    const result = await runCli(["doctor", "--needs", "admin:read,actions:propose"], {
+      A1ZAP_ADMIN_AGENT_KEY: "a1zap_admin_testkey",
+      A1ZAP_ADMIN_AGENT_API_URL: `http://127.0.0.1:${address.port}`,
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      ok: false,
+      apiUrl: `http://127.0.0.1:${address.port}`,
+      keyPrefix: "a1zap_admin_testkey",
+      requestId: "req_123",
+      scopes: ["admin:read", "growth:read"],
+      needs: ["admin:read", "actions:propose"],
+      missingScopes: ["actions:propose"],
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test("jobs list calls typed jobs endpoint with filters", async () => {
+  const captured: CapturedRequest = {};
+  const server = createServer((request, response) => {
+    captured.method = request.method;
+    captured.url = request.url;
+    captured.command = request.headers["x-a1zap-agent-command"] as string;
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ jobs: [] }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert(address && typeof address === "object");
+
+  try {
+    const result = await runCli(
+      [
+        "jobs",
+        "list",
+        "--lane",
+        "scraped_student_job",
+        "--status",
+        "active",
+        "--country",
+        "AU",
+        "--limit",
+        "25",
+      ],
+      {
+        A1ZAP_ADMIN_AGENT_KEY: "a1zap_admin_testkey",
+        A1ZAP_ADMIN_AGENT_API_URL: `http://127.0.0.1:${address.port}`,
+      },
+    );
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(captured.method, "GET");
+    assert.equal(
+      captured.url,
+      "/jobs?lane=scraped_student_job&status=active&country=AU&limit=25",
+    );
+    assert.equal(captured.command, "jobs list");
+  } finally {
+    server.close();
+  }
+});
+
+test("jobs import posts file payload and requires dry-run or yes", async () => {
+  const missingMode = await runCli(
+    ["jobs", "import", "--file", "/tmp/does-not-matter.csv"],
+    {
+      A1ZAP_ADMIN_AGENT_KEY: "a1zap_admin_testkey",
+      A1ZAP_ADMIN_AGENT_API_URL: "http://127.0.0.1:9",
+    },
+  );
+  assert.equal(missingMode.code, 2);
+  assert.match(missingMode.stderr, /requires --dry-run or --yes/);
+
+  const tempDir = await mkdtemp(join(tmpdir(), "a1zap-cli-test-"));
+  const filePath = join(tempDir, "roles.csv");
+  await writeFile(filePath, "title,company\nDesigner,A1Zap\n");
+
+  const captured: CapturedRequest = {};
+  const server = createServer((request, response) => {
+    captured.method = request.method;
+    captured.url = request.url;
+    captured.command = request.headers["x-a1zap-agent-command"] as string;
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk.toString();
+    });
+    request.on("end", () => {
+      captured.body = JSON.parse(body);
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ ok: true }));
+    });
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert(address && typeof address === "object");
+
+  try {
+    const result = await runCli(["jobs", "import", "--file", filePath, "--dry-run"], {
+      A1ZAP_ADMIN_AGENT_KEY: "a1zap_admin_testkey",
+      A1ZAP_ADMIN_AGENT_API_URL: `http://127.0.0.1:${address.port}`,
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(captured.method, "POST");
+    assert.equal(captured.url, "/jobs/import");
+    assert.equal(captured.command, "jobs import");
+    assert.deepEqual(captured.body, {
+      dryRun: true,
+      yes: false,
+      file: {
+        fileName: "roles.csv",
+        fileFormat: "csv",
+        content: "title,company\nDesigner,A1Zap\n",
+      },
+    });
+  } finally {
+    server.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("jobs qa set posts scoped patch body", async () => {
+  const captured: CapturedRequest = {};
+  const server = createServer((request, response) => {
+    captured.method = request.method;
+    captured.url = request.url;
+    captured.command = request.headers["x-a1zap-agent-command"] as string;
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk.toString();
+    });
+    request.on("end", () => {
+      captured.body = JSON.parse(body);
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ ok: true }));
+    });
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert(address && typeof address === "object");
+
+  try {
+    const result = await runCli(
+      [
+        "jobs",
+        "qa",
+        "set",
+        "job_123",
+        "--score",
+        "4",
+        "--recommendation",
+        "accept",
+        "--note",
+        "verified",
+        "--missing-fields",
+        "pay,deadline",
+        "--yes",
+      ],
+      {
+        A1ZAP_ADMIN_AGENT_KEY: "a1zap_admin_testkey",
+        A1ZAP_ADMIN_AGENT_API_URL: `http://127.0.0.1:${address.port}`,
+      },
+    );
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(captured.method, "POST");
+    assert.equal(captured.url, "/jobs/job_123/qa");
+    assert.equal(captured.command, "jobs qa set");
+    assert.deepEqual(captured.body, {
+      dryRun: false,
+      yes: true,
+      score: 4,
+      recommendation: "accept",
+      note: "verified",
+      missingFields: ["pay", "deadline"],
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test("outreach send requires explicit write mode", async () => {
+  const result = await runCli(["outreach", "send", "draft_123"], {
+    A1ZAP_ADMIN_AGENT_KEY: "a1zap_admin_testkey",
+    A1ZAP_ADMIN_AGENT_API_URL: "http://127.0.0.1:9",
+  });
+
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /outreach send requires --dry-run or --yes/);
+});

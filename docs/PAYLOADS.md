@@ -1560,3 +1560,87 @@ Backend errors are printed as JSON and exit with code `1`:
 ```
 
 Argument or validation errors are printed to stderr and exit with code `2`.
+
+## Agent Operations Route Groups
+
+The CLI includes client plumbing for newer agent-operations routes. Maker backend implementation details are tracked in `docs/AGENT_OPERATIONS_GAPS.md` and `a1zap-maker/docs/ADMIN_AGENT_STUDENT_JOBS_OPERATIONS_SPEC.md`.
+
+### `doctor`
+
+Backend route: `GET /whoami`
+
+```bash
+a1zap-admin-agent doctor --needs admin:read,actions:propose
+```
+
+Output:
+
+```ts
+{
+  ok: boolean;
+  apiUrl: string;
+  keyPrefix: string;
+  requestId?: string;
+  scopes: string[];
+  needs: string[];
+  missingScopes: string[];
+}
+```
+
+### Jobs
+
+Routes:
+
+- `GET /jobs`
+- `GET /jobs/:jobId`
+- `POST /jobs/import`
+- `POST /jobs/:jobId/qa`
+- `POST /jobs/:jobId/lane`
+- `POST /jobs/:jobId/status`
+- `POST /jobs/:jobId/publish/propose`
+- `POST /jobs/publish/:proposalId/apply`
+- `POST /jobs/:jobId/stale`
+
+Mutating jobs commands require `--dry-run` or `--yes`, except `publish propose`; `publish apply` also supports `--dry-run` before `--yes`.
+
+### UGC
+
+Routes:
+
+- `GET /ugc/leads`
+- `POST /ugc/leads/upsert`
+- `POST /ugc/briefs/propose`
+- `POST /ugc/briefs/:briefId/approve`
+
+### Outreach
+
+Routes:
+
+- `GET /outreach/targets`
+- `POST /outreach/targets/upsert`
+- `POST /outreach/drafts`
+- `POST /outreach/drafts/:draftId/approve`
+- `POST /outreach/drafts/:draftId/send`
+
+Draft creation and target upserts require `--dry-run` or `--yes`. Approve and send require `--yes`.
+
+### Summer In
+
+Routes:
+
+- `GET /summer-in/employers`
+- `POST /summer-in/links`
+- `GET /summer-in/links`
+- `GET /summer-in/metrics`
+
+Link creation requires `--dry-run` or `--yes`.
+
+### Projects
+
+Routes:
+
+- `GET /projects`
+- `GET /projects/tasks`
+- `POST /projects/tasks/upsert`
+- `POST /projects/tasks/:taskId/status`
+- `GET /projects/super-list`

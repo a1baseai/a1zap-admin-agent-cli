@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { readConfig, writeConfig } from "./config.js";
+import { basename, join } from "node:path";
+import { readConfig, resolveConfig, writeConfig } from "./config.js";
 import { ApiError, apiRequest } from "./http.js";
 import { compactNumber, compactPercent, printJson, printTable, } from "./format.js";
 class UsageError extends Error {
@@ -72,6 +72,8 @@ function printHelp() {
 
 Usage:
   a1zap-admin-agent config set <key> [--api-url <url>]
+  a1zap-admin-agent config get --redacted
+  a1zap-admin-agent doctor [--needs scope,scope]
   a1zap-admin-agent whoami
   a1zap-admin-agent admin catalog [--surface all]
   a1zap-admin-agent admin context [--surface all] [--limit 40]
@@ -96,6 +98,33 @@ Usage:
   a1zap-admin-agent actions propose "<prompt>"
   a1zap-admin-agent actions apply <auditEntryId> --yes
   a1zap-admin-agent actions cancel <auditEntryId>
+  a1zap-admin-agent jobs list [--lane all] [--status all] [--country all] [--limit 100]
+  a1zap-admin-agent jobs get <jobId>
+  a1zap-admin-agent jobs import --file roles.csv --dry-run|--yes
+  a1zap-admin-agent jobs qa set <jobId> --score 4 --recommendation accept --note "..." --dry-run|--yes
+  a1zap-admin-agent jobs lane set <jobId> --lane scraped_student_job --dry-run|--yes
+  a1zap-admin-agent jobs status set <jobId> --status draft --dry-run|--yes
+  a1zap-admin-agent jobs publish propose <jobId>
+  a1zap-admin-agent jobs publish apply <proposalId> --dry-run|--yes
+  a1zap-admin-agent jobs stale mark <jobId> --reason "closed listing" --dry-run|--yes
+  a1zap-admin-agent ugc leads list [--status all]
+  a1zap-admin-agent ugc leads upsert --file ugc-leads.csv --dry-run|--yes
+  a1zap-admin-agent ugc briefs propose --lead <leadId> --file brief.json
+  a1zap-admin-agent ugc briefs approve <briefId> --dry-run|--yes
+  a1zap-admin-agent outreach targets list [--project summer-in] [--status all]
+  a1zap-admin-agent outreach targets upsert --file employer-targets.csv --dry-run|--yes
+  a1zap-admin-agent outreach drafts create --target <targetId> --template <template> --dry-run|--yes
+  a1zap-admin-agent outreach drafts approve <draftId> --dry-run|--yes
+  a1zap-admin-agent outreach send <draftId> --dry-run|--yes
+  a1zap-admin-agent summer-in employers list [--status all]
+  a1zap-admin-agent summer-in links create --employer <targetId> --campaign <campaign> --channel email --dry-run|--yes
+  a1zap-admin-agent summer-in links list [--campaign <campaign>]
+  a1zap-admin-agent summer-in metrics --campaign <campaign> [--by employer]
+  a1zap-admin-agent projects list [--status active]
+  a1zap-admin-agent projects tasks list --project <projectId> [--status all]
+  a1zap-admin-agent projects tasks upsert --project <projectId> --file tasks.json --dry-run|--yes
+  a1zap-admin-agent projects tasks status <taskId> --status blocked --note "..." --dry-run|--yes
+  a1zap-admin-agent projects super-list [--status active] [--format json]
 `);
 }
 function growthSummaryFromContext(context) {
@@ -223,6 +252,70 @@ function getEnvelopeInstanceId(envelope) {
 function requireFileFlag(flags) {
     return requirePositional(flagString(flags, "file"), "--file");
 }
+function flagCsvList(flags, name) {
+    const value = flagString(flags, name);
+    return value
+        ? value
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : [];
+}
+function requireFlagString(flags, name) {
+    return requirePositional(flagString(flags, name), `--${name}`);
+}
+function optionalWriteMode(flags) {
+    return {
+        dryRun: hasFlag(flags, "dry-run") || hasFlag(flags, "dryRun"),
+        yes: hasFlag(flags, "yes"),
+    };
+}
+function requireWriteMode(flags, commandName) {
+    const mode = optionalWriteMode(flags);
+    if (!mode.dryRun && !mode.yes) {
+        throw new UsageError(`${commandName} requires --dry-run or --yes`);
+    }
+    return mode;
+}
+async function readPayloadFile(filePath) {
+    const raw = await readFile(filePath, "utf8");
+    const fileName = basename(filePath);
+    const lowerName = fileName.toLowerCase();
+    if (lowerName.endsWith(".json")) {
+        try {
+            return {
+                fileName,
+                fileFormat: "json",
+                payload: JSON.parse(raw),
+            };
+        }
+        catch (error) {
+            throw new UsageError(`Invalid JSON in ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+    if (lowerName.endsWith(".csv")) {
+        return { fileName, fileFormat: "csv", content: raw };
+    }
+    if (lowerName.endsWith(".tsv")) {
+        return { fileName, fileFormat: "tsv", content: raw };
+    }
+    return { fileName, fileFormat: "text", content: raw };
+}
+async function postJsonFile(path, flags, command, extraBody = {}) {
+    const mode = requireWriteMode(flags, command);
+    const file = await readPayloadFile(requireFileFlag(flags));
+    const result = await apiRequest(path, {
+        method: "POST",
+        body: {
+            ...extraBody,
+            ...mode,
+            idempotencyKey: flagString(flags, "idempotency-key"),
+            file,
+        },
+        command,
+    });
+    printJson(result);
+}
 function runEditor(editor, filePath) {
     return new Promise((resolve, reject) => {
         const child = spawn(`${editor} ${JSON.stringify(filePath)}`, {
@@ -260,23 +353,35 @@ async function handleAdmin(args, commandPrefix = "admin") {
 }
 async function handleConfig(args) {
     const [subcommand, key] = args.positionals;
-    if (subcommand !== "set") {
-        throw new UsageError("Usage: a1zap-admin-agent config set <key> [--api-url <url>]");
+    if (subcommand === "set") {
+        const apiKey = requirePositional(key, "key");
+        const existing = await readConfig();
+        const config = {
+            ...existing,
+            apiKey,
+            apiUrl: flagString(args.flags, "api-url") ?? existing.apiUrl,
+        };
+        const configPath = await writeConfig(config);
+        printJson({
+            ok: true,
+            configPath,
+            apiUrl: config.apiUrl,
+            keyPrefix: apiKey.slice(0, 21),
+        });
+        return;
     }
-    const apiKey = requirePositional(key, "key");
-    const existing = await readConfig();
-    const config = {
-        ...existing,
-        apiKey,
-        apiUrl: flagString(args.flags, "api-url") ?? existing.apiUrl,
-    };
-    const configPath = await writeConfig(config);
-    printJson({
-        ok: true,
-        configPath,
-        apiUrl: config.apiUrl,
-        keyPrefix: apiKey.slice(0, 21),
-    });
+    if (subcommand === "get") {
+        const config = await resolveConfig();
+        printJson({
+            apiUrl: config.apiUrl,
+            keyPrefix: hasFlag(args.flags, "redacted")
+                ? config.apiKey.slice(0, 21)
+                : undefined,
+            hasKey: Boolean(config.apiKey),
+        });
+        return;
+    }
+    throw new UsageError("Usage: a1zap-admin-agent config set <key> [--api-url <url>] | config get --redacted");
 }
 async function handleGrowth(args) {
     const [subcommand] = args.positionals;
@@ -564,6 +669,330 @@ async function handleActions(args) {
     }
     throw new UsageError("Usage: a1zap-admin-agent actions propose|apply|cancel");
 }
+async function handleDoctor(args) {
+    const config = await resolveConfig();
+    const needs = flagCsvList(args.flags, "needs");
+    const result = await apiRequest("/whoami", { command: "doctor" });
+    const scopes = Array.isArray(result?.key?.scopes)
+        ? result.key.scopes
+        : [];
+    const hasScope = (scope) => scopes.includes(scope) ||
+        scopes.includes("*") ||
+        scopes.includes(`${scope.split(":")[0]}:*`);
+    const missingScopes = needs.filter((scope) => !hasScope(scope));
+    printJson({
+        ok: missingScopes.length === 0,
+        apiUrl: config.apiUrl,
+        keyPrefix: config.apiKey.slice(0, 21),
+        requestId: result?.requestId,
+        scopes,
+        needs,
+        missingScopes,
+    });
+}
+async function handleJobs(args) {
+    const [subcommand, ...rest] = args.positionals;
+    if (subcommand === "list") {
+        const result = await apiRequest(buildPath("/jobs", {
+            lane: flagString(args.flags, "lane") ?? "all",
+            status: flagString(args.flags, "status") ?? "all",
+            country: flagString(args.flags, "country") ?? "all",
+            review: flagString(args.flags, "review"),
+            qa: flagString(args.flags, "qa"),
+            sourceType: flagString(args.flags, "source-type"),
+            importBatch: flagString(args.flags, "import-batch"),
+            stale: flagString(args.flags, "stale"),
+            limit: flagNumber(args.flags, "limit", 100),
+        }), { command: "jobs list" });
+        printJson(result);
+        return;
+    }
+    if (subcommand === "get") {
+        const jobId = requirePositional(rest[0], "jobId");
+        const result = await apiRequest(`/jobs/${encodeURIComponent(jobId)}`, {
+            command: "jobs get",
+        });
+        printJson(result);
+        return;
+    }
+    if (subcommand === "import") {
+        await postJsonFile("/jobs/import", args.flags, "jobs import");
+        return;
+    }
+    if (subcommand === "qa" && rest[0] === "set") {
+        const jobId = requirePositional(rest[1], "jobId");
+        const mode = requireWriteMode(args.flags, "jobs qa set");
+        const result = await apiRequest(`/jobs/${encodeURIComponent(jobId)}/qa`, {
+            method: "POST",
+            body: {
+                ...mode,
+                score: Number(requireFlagString(args.flags, "score")),
+                recommendation: requireFlagString(args.flags, "recommendation"),
+                note: flagString(args.flags, "note"),
+                missingFields: flagCsvList(args.flags, "missing-fields"),
+            },
+            command: "jobs qa set",
+        });
+        printJson(result);
+        return;
+    }
+    if (subcommand === "lane" && rest[0] === "set") {
+        const jobId = requirePositional(rest[1], "jobId");
+        const mode = requireWriteMode(args.flags, "jobs lane set");
+        const result = await apiRequest(`/jobs/${encodeURIComponent(jobId)}/lane`, {
+            method: "POST",
+            body: { ...mode, lane: requireFlagString(args.flags, "lane") },
+            command: "jobs lane set",
+        });
+        printJson(result);
+        return;
+    }
+    if (subcommand === "status" && rest[0] === "set") {
+        const jobId = requirePositional(rest[1], "jobId");
+        const mode = requireWriteMode(args.flags, "jobs status set");
+        const result = await apiRequest(`/jobs/${encodeURIComponent(jobId)}/status`, {
+            method: "POST",
+            body: {
+                ...mode,
+                status: requireFlagString(args.flags, "status"),
+                reviewStatus: flagString(args.flags, "review-status"),
+                note: flagString(args.flags, "note"),
+            },
+            command: "jobs status set",
+        });
+        printJson(result);
+        return;
+    }
+    if (subcommand === "publish" && rest[0] === "propose") {
+        const jobId = requirePositional(rest[1], "jobId");
+        const result = await apiRequest(`/jobs/${encodeURIComponent(jobId)}/publish/propose`, {
+            method: "POST",
+            body: { note: flagString(args.flags, "note") },
+            command: "jobs publish propose",
+        });
+        printJson(result);
+        return;
+    }
+    if (subcommand === "publish" && rest[0] === "apply") {
+        const proposalId = requirePositional(rest[1], "proposalId");
+        const mode = requireWriteMode(args.flags, "jobs publish apply");
+        const result = await apiRequest(`/jobs/publish/${encodeURIComponent(proposalId)}/apply`, {
+            method: "POST",
+            body: mode,
+            command: "jobs publish apply",
+        });
+        printJson(result);
+        return;
+    }
+    if (subcommand === "stale" && rest[0] === "mark") {
+        const jobId = requirePositional(rest[1], "jobId");
+        const mode = requireWriteMode(args.flags, "jobs stale mark");
+        const result = await apiRequest(`/jobs/${encodeURIComponent(jobId)}/stale`, {
+            method: "POST",
+            body: {
+                ...mode,
+                reason: requireFlagString(args.flags, "reason"),
+                lastVerifiedAt: flagString(args.flags, "last-verified-at"),
+            },
+            command: "jobs stale mark",
+        });
+        printJson(result);
+        return;
+    }
+    throw new UsageError("Usage: a1zap-admin-agent jobs list|get|import|qa set|lane set|status set|publish propose|publish apply|stale mark");
+}
+async function handleUgc(args) {
+    const [resource, subcommand, ...rest] = args.positionals;
+    if (resource === "leads" && subcommand === "list") {
+        const result = await apiRequest(buildPath("/ugc/leads", {
+            status: flagString(args.flags, "status") ?? "all",
+            limit: flagNumber(args.flags, "limit", 100),
+        }), { command: "ugc leads list" });
+        printJson(result);
+        return;
+    }
+    if (resource === "leads" && subcommand === "upsert") {
+        await postJsonFile("/ugc/leads/upsert", args.flags, "ugc leads upsert");
+        return;
+    }
+    if (resource === "briefs" && subcommand === "propose") {
+        const file = await readPayloadFile(requireFileFlag(args.flags));
+        const result = await apiRequest("/ugc/briefs/propose", {
+            method: "POST",
+            body: {
+                leadId: requireFlagString(args.flags, "lead"),
+                file,
+            },
+            command: "ugc briefs propose",
+        });
+        printJson(result);
+        return;
+    }
+    if (resource === "briefs" && subcommand === "approve") {
+        const briefId = requirePositional(rest[0], "briefId");
+        const mode = requireWriteMode(args.flags, "ugc briefs approve");
+        const result = await apiRequest(`/ugc/briefs/${encodeURIComponent(briefId)}/approve`, {
+            method: "POST",
+            body: mode,
+            command: "ugc briefs approve",
+        });
+        printJson(result);
+        return;
+    }
+    throw new UsageError("Usage: a1zap-admin-agent ugc leads list|leads upsert|briefs propose|briefs approve");
+}
+async function handleOutreach(args) {
+    const [resource, subcommand, ...rest] = args.positionals;
+    if (resource === "targets" && subcommand === "list") {
+        const result = await apiRequest(buildPath("/outreach/targets", {
+            project: flagString(args.flags, "project"),
+            status: flagString(args.flags, "status") ?? "all",
+            limit: flagNumber(args.flags, "limit", 100),
+        }), { command: "outreach targets list" });
+        printJson(result);
+        return;
+    }
+    if (resource === "targets" && subcommand === "upsert") {
+        await postJsonFile("/outreach/targets/upsert", args.flags, "outreach targets upsert", {
+            project: flagString(args.flags, "project"),
+        });
+        return;
+    }
+    if (resource === "drafts" && subcommand === "create") {
+        const mode = requireWriteMode(args.flags, "outreach drafts create");
+        const result = await apiRequest("/outreach/drafts", {
+            method: "POST",
+            body: {
+                ...mode,
+                targetId: requireFlagString(args.flags, "target"),
+                template: requireFlagString(args.flags, "template"),
+                channel: flagString(args.flags, "channel") ?? "email",
+                note: flagString(args.flags, "note"),
+            },
+            command: "outreach drafts create",
+        });
+        printJson(result);
+        return;
+    }
+    if (resource === "drafts" && subcommand === "approve") {
+        const draftId = requirePositional(rest[0], "draftId");
+        const mode = requireWriteMode(args.flags, "outreach drafts approve");
+        const result = await apiRequest(`/outreach/drafts/${encodeURIComponent(draftId)}/approve`, {
+            method: "POST",
+            body: mode,
+            command: "outreach drafts approve",
+        });
+        printJson(result);
+        return;
+    }
+    if (resource === "send") {
+        const draftId = requirePositional(subcommand, "draftId");
+        const mode = requireWriteMode(args.flags, "outreach send");
+        const result = await apiRequest(`/outreach/drafts/${encodeURIComponent(draftId)}/send`, {
+            method: "POST",
+            body: mode,
+            command: "outreach send",
+        });
+        printJson(result);
+        return;
+    }
+    throw new UsageError("Usage: a1zap-admin-agent outreach targets list|targets upsert|drafts create|drafts approve|send");
+}
+async function handleSummerIn(args) {
+    const [resource, subcommand, ...rest] = args.positionals;
+    if (resource === "employers" && subcommand === "list") {
+        const result = await apiRequest(buildPath("/summer-in/employers", {
+            status: flagString(args.flags, "status") ?? "all",
+            limit: flagNumber(args.flags, "limit", 100),
+        }), { command: "summer-in employers list" });
+        printJson(result);
+        return;
+    }
+    if (resource === "links" && subcommand === "create") {
+        const mode = requireWriteMode(args.flags, "summer-in links create");
+        const result = await apiRequest("/summer-in/links", {
+            method: "POST",
+            body: {
+                ...mode,
+                employerId: requireFlagString(args.flags, "employer"),
+                campaign: requireFlagString(args.flags, "campaign"),
+                channel: flagString(args.flags, "channel") ?? "email",
+                disabled: hasFlag(args.flags, "disabled"),
+            },
+            command: "summer-in links create",
+        });
+        printJson(result);
+        return;
+    }
+    if (resource === "links" && subcommand === "list") {
+        const result = await apiRequest(buildPath("/summer-in/links", {
+            campaign: flagString(args.flags, "campaign"),
+            status: flagString(args.flags, "status") ?? "all",
+            limit: flagNumber(args.flags, "limit", 100),
+        }), { command: "summer-in links list" });
+        printJson(result);
+        return;
+    }
+    if (resource === "metrics") {
+        const result = await apiRequest(buildPath("/summer-in/metrics", {
+            campaign: requireFlagString(args.flags, "campaign"),
+            by: flagString(args.flags, "by") ?? "employer",
+        }), { command: "summer-in metrics" });
+        printJson(result);
+        return;
+    }
+    throw new UsageError("Usage: a1zap-admin-agent summer-in employers list|links create|links list|metrics");
+}
+async function handleProjects(args) {
+    const [resource, subcommand, ...rest] = args.positionals;
+    if (resource === "list") {
+        const result = await apiRequest(buildPath("/projects", {
+            status: flagString(args.flags, "status") ?? "active",
+            limit: flagNumber(args.flags, "limit", 100),
+        }), { command: "projects list" });
+        printJson(result);
+        return;
+    }
+    if (resource === "tasks" && subcommand === "list") {
+        const result = await apiRequest(buildPath("/projects/tasks", {
+            project: requireFlagString(args.flags, "project"),
+            status: flagString(args.flags, "status") ?? "all",
+            limit: flagNumber(args.flags, "limit", 100),
+        }), { command: "projects tasks list" });
+        printJson(result);
+        return;
+    }
+    if (resource === "tasks" && subcommand === "upsert") {
+        await postJsonFile("/projects/tasks/upsert", args.flags, "projects tasks upsert", {
+            projectId: requireFlagString(args.flags, "project"),
+        });
+        return;
+    }
+    if (resource === "tasks" && subcommand === "status") {
+        const taskId = requirePositional(rest[0], "taskId");
+        const mode = requireWriteMode(args.flags, "projects tasks status");
+        const result = await apiRequest(`/projects/tasks/${encodeURIComponent(taskId)}/status`, {
+            method: "POST",
+            body: {
+                ...mode,
+                status: requireFlagString(args.flags, "status"),
+                note: flagString(args.flags, "note"),
+            },
+            command: "projects tasks status",
+        });
+        printJson(result);
+        return;
+    }
+    if (resource === "super-list") {
+        const result = await apiRequest(buildPath("/projects/super-list", {
+            status: flagString(args.flags, "status") ?? "active",
+            format: flagString(args.flags, "format") ?? "json",
+        }), { command: "projects super-list" });
+        printJson(result);
+        return;
+    }
+    throw new UsageError("Usage: a1zap-admin-agent projects list|tasks list|tasks upsert|tasks status|super-list");
+}
 export async function main(argv = process.argv.slice(2)) {
     const parsed = parseArgs(argv);
     const [command, ...rest] = parsed.positionals;
@@ -574,6 +1003,10 @@ export async function main(argv = process.argv.slice(2)) {
     }
     if (command === "config") {
         await handleConfig(args);
+        return;
+    }
+    if (command === "doctor") {
+        await handleDoctor(args);
         return;
     }
     if (command === "whoami") {
@@ -603,6 +1036,26 @@ export async function main(argv = process.argv.slice(2)) {
     }
     if (command === "actions") {
         await handleActions(args);
+        return;
+    }
+    if (command === "jobs") {
+        await handleJobs(args);
+        return;
+    }
+    if (command === "ugc") {
+        await handleUgc(args);
+        return;
+    }
+    if (command === "outreach") {
+        await handleOutreach(args);
+        return;
+    }
+    if (command === "summer-in") {
+        await handleSummerIn(args);
+        return;
+    }
+    if (command === "projects") {
+        await handleProjects(args);
         return;
     }
     throw new UsageError(`Unknown command: ${command}`);
